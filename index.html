@@ -33,8 +33,8 @@
           <div class="panel-head">
             <div>
               <p class="panel-index">Panel 1</p>
-              <h2>`validatePortrait`</h2>
-              <p>检测上传图片是否满足后续迁移模型的基础输入要求。</p>
+              <h2>用户肖像检测</h2>
+              <p>上传照片，调用本地后端确认是否存在会阻断发型迁移的问题。</p>
             </div>
             <span id="validationBadge" class="badge neutral">待检测</span>
           </div>
@@ -45,18 +45,18 @@
           </label>
 
           <div class="rule-box">
-            <p class="rule-title">当前拦截目标</p>
-            <ul class="rule-list">
-              <li>必须能稳定识别到单人肖像</li>
-              <li>正脸或近正脸，脸部区域足够大</li>
-              <li>头顶、额头、脸部主体不应被裁切</li>
-              <li>不允许明显模糊、过暗、低分辨率</li>
-              <li>不允许多人、大面积遮挡或侧脸角度过大</li>
-            </ul>
+            <p class="rule-title">优先拦截</p>
+            <div class="compact-tags">
+              <span>无人脸</span>
+              <span>多人主体</span>
+              <span>极低分辨率</span>
+              <span>严重模糊/过暗</span>
+              <span>严重侧脸/脸过小</span>
+            </div>
           </div>
 
-          <div class="slider-group">
-            <label for="strictnessRange">校验严格度</label>
+          <div class="slider-group compact-control">
+            <label for="strictnessRange">提示严格度</label>
             <div class="slider-row">
               <input
                 id="strictnessRange"
@@ -64,31 +64,34 @@
                 min="0"
                 max="1"
                 step="0.01"
-                value="0.7"
+                value="0.5"
               />
-              <output id="strictnessValue">0.70</output>
+              <output id="strictnessValue">0.50</output>
             </div>
+            <p class="field-note">影响风险提示灵敏度；阻断条件保持宽松。</p>
           </div>
 
-          <label class="checkbox-row">
+          <label class="checkbox-row subtle-state">
             <input id="mockToggle" type="checkbox" disabled />
-            <span>前端只做文件校验；肖像质量检测统一走后端</span>
+            <span>前端只校验格式/大小；人脸检测走后端</span>
           </label>
 
-          <div class="validation-options">
+          <div class="validation-options compact-options">
             <p class="rule-title">后端校验步骤</p>
-            <label class="checkbox-row option-row">
-              <input id="faceDetectionOption" type="checkbox" checked />
-              <span>Face Detection：后端确认是否单人、是否有人脸、脸框位置和脸部大小</span>
-            </label>
-            <label class="checkbox-row option-row is-disabled">
-              <input id="landmarkOption" type="checkbox" disabled />
-              <span>Landmark / Face Alignment：迁移模型内部通常会做；当前 POC 暂不单独开启</span>
-            </label>
-            <label class="checkbox-row option-row is-disabled">
-              <input id="segmentationOption" type="checkbox" disabled />
-              <span>Hair Segmentation / Face Parsing：迁移模型内部通常会做；当前 POC 暂不单独开启</span>
-            </label>
+            <div class="option-strip">
+              <label class="checkbox-row option-row">
+                <input id="faceDetectionOption" type="checkbox" checked />
+                <span>Face Detection</span>
+              </label>
+              <label class="checkbox-row option-row is-disabled">
+                <input id="landmarkOption" type="checkbox" disabled />
+                <span>Landmark 暂不单独开启</span>
+              </label>
+              <label class="checkbox-row option-row is-disabled">
+                <input id="segmentationOption" type="checkbox" disabled />
+                <span>Segmentation 暂不单独开启</span>
+              </label>
+            </div>
           </div>
 
           <label class="input-group">
@@ -118,6 +121,12 @@
             </div>
 
             <div class="metrics-card">
+              <div id="resultSummary" class="result-summary neutral">
+                <p class="result-kicker">检测结论</p>
+                <strong id="resultTitle">等待检测</strong>
+                <span id="resultDetail">上传图片后，点击“开始检测”。</span>
+              </div>
+
               <h3>检测指标</h3>
               <div class="metric-grid">
                 <div class="metric-item">
@@ -169,8 +178,8 @@
             </div>
           </div>
 
-          <div class="api-box">
-            <h3>预留接口结构</h3>
+          <details class="api-box api-details">
+            <summary>查看预留接口结构</summary>
             <pre><code>{
   "portraitBase64": "...",
   "strictness": 0.7
@@ -192,13 +201,114 @@
     { "code": "MULTIPLE_PEOPLE", "message": "检测到多人" }
   ]
 }</code></pre>
+          </details>
+        </section>
+
+        <section class="panel feature-panel stable-hair-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-index">Panel 2</p>
+              <h2>Stable-Hair 接入 POC</h2>
+              <p>优先接入的发型迁移链路：用户肖像 A + 发型参考图 B，后端先准备 Stable-Hair 请求。</p>
+            </div>
+            <span id="stableHairStatusBadge" class="badge neutral">未检查</span>
+          </div>
+
+          <div class="model-try-grid">
+            <label class="input-group">
+              <span>发型参考图 B</span>
+              <input id="referenceHairInput" type="file" accept="image/*" />
+            </label>
+
+            <label class="input-group">
+              <span>B 图检测接口</span>
+              <input
+                id="hairReferenceEndpointInput"
+                type="url"
+                value="http://127.0.0.1:8000/validate-hair-reference"
+                placeholder="http://127.0.0.1:8000/validate-hair-reference"
+              />
+            </label>
+
+            <label class="input-group">
+              <span>生成接口</span>
+              <input
+                id="generateEndpointInput"
+                type="url"
+                value="http://127.0.0.1:8000/generate-hairstyle"
+                placeholder="http://127.0.0.1:8000/generate-hairstyle"
+              />
+            </label>
+          </div>
+
+          <div class="model-action-row">
+            <button id="validateHairReferenceButton" type="button" class="secondary-button">
+              检测发型参考图
+            </button>
+            <button id="checkStableHairButton" type="button" class="secondary-button">
+              检查 Stable-Hair 状态
+            </button>
+            <button id="prepareStableHairButton" type="button" class="primary-button">
+              准备 Stable-Hair 请求
+            </button>
+          </div>
+
+          <div class="validate-layout">
+            <div class="preview-card">
+              <h3>参考发型预览</h3>
+              <img id="referenceHairPreview" alt="发型参考图预览" />
+              <p id="referenceHairEmpty" class="empty-text">未上传参考发型图</p>
+            </div>
+
+            <div class="metrics-card">
+              <div id="stableHairSummary" class="result-summary neutral">
+                <p class="result-kicker">Stable-Hair 状态</p>
+                <strong id="stableHairTitle">等待检查</strong>
+                <span id="stableHairDetail">当前只启用准备请求；权重和专用环境配置完成后再执行模型。</span>
+              </div>
+
+              <div id="hairReferenceSummary" class="result-summary neutral compact-summary">
+                <p class="result-kicker">参考图 B 检测</p>
+                <strong id="hairReferenceTitle">等待检测</strong>
+                <span id="hairReferenceDetail">当前先做头部定位、基础画质和裁切风险；hair segmentation 后续接入。</span>
+              </div>
+
+              <div class="checks-panel">
+                <h3>B 图检测详情</h3>
+                <ul id="hairReferenceCheckList" class="check-list">
+                  <li>尚未检测参考图</li>
+                </ul>
+              </div>
+
+              <div class="checks-panel">
+                <h3>接入状态</h3>
+                <ul id="stableHairStatusList" class="check-list">
+                  <li>尚未检查</li>
+                </ul>
+              </div>
+
+              <details class="api-box api-details">
+                <summary>查看最近一次 Stable-Hair 响应</summary>
+                <pre><code id="stableHairResponseText">暂无响应</code></pre>
+              </details>
+            </div>
+          </div>
+
+          <div class="info-block compact-model-note">
+            <h3>Stable-Hair 真实输入</h3>
+            <ul class="rule-list">
+              <li>`source_image`：用户肖像；POC 会保存为 `uploads/stable-hair/.../source.jpg`</li>
+              <li>`reference_image`：目标发型参考图；POC 会保存为 `reference.jpg`</li>
+              <li>`source_image_bald`：Stable-Hair 第一阶段 Bald Converter 的中间结果</li>
+              <li>公开权重需要手动放入 `external_models/Stable-Hair/models/stage1` 和 `models/stage2`</li>
+            </ul>
           </div>
         </section>
 
         <section class="panel feature-panel">
           <div class="panel-head">
             <div>
-              <p class="panel-index">Panel 2</p>
+              <p class="panel-index">Panel 3</p>
               <h2>Barbershop 需要什么输入</h2>
               <p>典型的三图发型迁移方案，对输入对齐要求较高。</p>
             </div>
@@ -236,7 +346,7 @@
         <section class="panel feature-panel">
           <div class="panel-head">
             <div>
-              <p class="panel-index">Panel 3</p>
+              <p class="panel-index">Panel 4</p>
               <h2>HairFastGAN 需要什么输入</h2>
               <p>工程接入最友好，但仍然要求单人肖像和可对齐的人脸。</p>
             </div>
@@ -268,55 +378,6 @@
               <li>可先运行 `scripts/align_face.py`，或在调用时传 `align=true`</li>
               <li>脚本默认取最大的人脸，多人场景不适合作为标准输入</li>
               <li>因此仍然需要前端先拦截多人、无脸、模糊、遮挡和构图异常</li>
-            </ul>
-          </div>
-        </section>
-
-        <section class="panel feature-panel stable-hair-panel">
-          <div class="panel-head">
-            <div>
-              <p class="panel-index">Panel 4</p>
-              <h2>Stable-Hair 需要什么输入</h2>
-              <p>基于扩散模型的两阶段方案：先去除源人物头发，再把参考发型迁移到 bald image 上。</p>
-            </div>
-            <span class="badge accent">源人像 + 参考发型</span>
-          </div>
-
-          <div class="info-block">
-            <h3>核心输入</h3>
-            <ul class="rule-list">
-              <li>`id_image` / `source_image`：用户提供的人脸图，作为身份和背景来源</li>
-              <li>`ref_hair` / `reference_image`：带有目标发型的参考图</li>
-              <li>`source_image_bald`：第一阶段 Bald Converter 生成的无发/去发中间图</li>
-            </ul>
-          </div>
-
-          <div class="info-block">
-            <h3>官方 demo 参数</h3>
-            <ul class="rule-list">
-              <li>`Converter Scale`：去发阶段强度</li>
-              <li>`Hair Encoder Scale`：参考发型编码强度</li>
-              <li>`CFG`：扩散模型 guidance scale</li>
-              <li>`Latent IdentityNet Scale`：身份和背景保持相关的控制强度</li>
-            </ul>
-          </div>
-
-          <div class="info-block">
-            <h3>前置要求</h3>
-            <ul class="rule-list">
-              <li>官方 demo 会把源图和参考发型图 resize 到 `512x512`</li>
-              <li>官方说明里提到 aligned faces 效果更好</li>
-              <li>公开模型训练中的脸图来自 FFHQ，意味着主要是裁剪、对齐后的脸</li>
-              <li>第一阶段 bald converter 效果会直接影响最终发型迁移质量</li>
-            </ul>
-          </div>
-
-          <div class="info-block">
-            <h3>对前端校验的含义</h3>
-            <ul class="rule-list">
-              <li>除了检测用户图片 A，也应检测发型参考图 B 是否包含清晰头发区域</li>
-              <li>用户图片 A 最好是单人、清晰、可对齐的近景肖像</li>
-              <li>后端最好返回 bald preview，方便判断第一阶段是否失败</li>
             </ul>
           </div>
         </section>

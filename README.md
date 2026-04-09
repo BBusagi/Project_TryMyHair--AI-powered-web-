@@ -18,15 +18,18 @@
 - 检测结果面板
 - 错误码列表展示
 - `validatePortrait` API 端口输入框
+- Stable-Hair 接入 POC 面板
+- Stable-Hair 参考发型图 B 上传
+- 参考发型图 B 后端轻量检测
+- Stable-Hair 状态检查和请求准备按钮
 - Barbershop 输入要求面板
 - HairFastGAN 输入要求面板
-- Stable-Hair 输入要求面板
 
 入口文件：
 
-- [index.html](/mnt/d/GitProject/BBusagi/HTML/HairDesigner/index.html)
-- [styles.css](/mnt/d/GitProject/BBusagi/HTML/HairDesigner/styles.css)
-- [app.js](/mnt/d/GitProject/BBusagi/HTML/HairDesigner/app.js)
+- [index.html](/mnt/d/GitProject/TryMyHair/index.html)
+- [styles.css](/mnt/d/GitProject/TryMyHair/styles.css)
+- [app.js](/mnt/d/GitProject/TryMyHair/app.js)
 
 ## `validatePortrait` 需要覆盖的过滤规则
 
@@ -118,13 +121,15 @@ bash scripts/run_backend.sh
 2. 打开 POC 页面
 3. 点击“开始检测”
 
-当前 server 是后端占位，只做：
+当前 server 已实现：
 
 - 分辨率
 - 亮度
 - 模糊 proxy
 - MediaPipe Face Detection：安装 `mediapipe` 后启用
 - OpenCV Haar fallback：当 MediaPipe runtime 不可用时使用
+- `GET /stable-hair/status`：检查 Stable-Hair 仓库、runner、权重状态
+- `POST /generate-hairstyle`：Stable-Hair 请求准备；保存 A/B 图片并生成每次请求的 yaml config
 
 它保留了 `checks` 字段，后面可以继续接 MediaPipe / RetinaFace / OpenAI。
 
@@ -306,8 +311,67 @@ external_models/
 
 当前保留了后端适配占位：
 
-- [backend/model_adapters.py](/mnt/d/GitProject/BBusagi/HTML/HairDesigner/backend/model_adapters.py)
-- [backend/README.md](/mnt/d/GitProject/BBusagi/HTML/HairDesigner/backend/README.md)
+- [backend/model_adapters.py](/mnt/d/GitProject/TryMyHair/backend/model_adapters.py)
+- [backend/README.md](/mnt/d/GitProject/TryMyHair/backend/README.md)
+
+## Stable-Hair 接入状态
+
+当前已经接上项目内接口，但默认不会直接执行大模型。
+
+前端 Panel 2 会调用：
+
+- `GET http://127.0.0.1:8000/stable-hair/status`
+- `POST http://127.0.0.1:8000/generate-hairstyle`
+
+`generate-hairstyle` 当前会：
+
+- 保存用户肖像 A 到 `uploads/stable-hair/<request-id>/source.jpg`
+- 保存发型参考图 B 到 `uploads/stable-hair/<request-id>/reference.jpg`
+- 生成 Stable-Hair 配置到 `uploads/stable-hair/<request-id>/hair_transfer.yaml`
+- 返回之后可执行的 command
+
+要真正执行 Stable-Hair，还需要另外准备：
+
+- `external_models/Stable-Hair/models/stage1/pytorch_model.bin`
+- `external_models/Stable-Hair/models/stage2/pytorch_model.bin`
+- `external_models/Stable-Hair/models/stage2/pytorch_model_1.bin`
+- `external_models/Stable-Hair/models/stage2/pytorch_model_2.bin`
+- Stable-Hair 专用 Python / CUDA 环境
+- 该 Python 环境里能 import `torch`、`diffusers`、`omegaconf`
+
+如果专用 Python 不在 `external_models/Stable-Hair/.venv/bin/python`，启动后端前设置：
+
+```bash
+export STABLE_HAIR_PYTHON=/path/to/stable-hair/python
+```
+
+## 当前推荐开发路径
+
+1. `validatePortrait`
+   先确认用户肖像 A 可定位到单个主要人脸。
+2. `validateHairReference`
+   先确认参考图 B 可定位到头部，且不是严重模糊/过暗/裁切。
+3. `stable-hair/status`
+   确认 Stable-Hair 代码、runner、权重、Python 依赖是否 ready。
+4. `generate-hairstyle` with `executeModel=false`
+   先确认后端能保存 A/B 输入，并生成每次请求的 `hair_transfer.yaml`。
+5. `generate-hairstyle` with `executeModel=true`
+   权重和 CUDA / torch / diffusers 环境完成后，再开启真实推理。
+6. 显示结果图和中间 bald preview
+   Stable-Hair 跑通后，将后端返回的结果图显示到前端。
+
+## TODO：Hair Segmentation
+
+当前 B 图检测还没有真正识别头发 mask，只用 Face Detection / 画质 / 构图做 proxy。
+
+后续应增加 `hair segmentation / face parsing`，用于：
+
+- 计算参考图 B 的头发 mask 面积
+- 判断头发是否接触图片上边缘/左右边缘
+- 判断发型主体是否完整
+- 判断帽子、手、饰品是否大面积遮挡发型
+- 提取参考发色/纹理的基础统计
+- 生成可视化 hair mask preview
 
 ## 后续接 OpenAI 的建议方式
 

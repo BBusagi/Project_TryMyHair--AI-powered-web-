@@ -4,12 +4,17 @@ import base64
 from ctypes.util import find_library
 from io import BytesIO
 from pathlib import Path
+import subprocess
+from time import time
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image, ImageStat
+
+from backend.model_adapters import MODEL_ADAPTERS, TransferInputs
 
 try:
     import cv2
@@ -31,6 +36,9 @@ except ImportError:
 app = FastAPI(title="HairDesigner Backend POC")
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 MEDIAPIPE_FACE_MODEL_PATH = PROJECT_DIR / "backend/models/blaze_face_short_range.tflite"
+UPLOADS_DIR = PROJECT_DIR / "uploads"
+OUTPUTS_DIR = PROJECT_DIR / "outputs"
+STABLE_HAIR_ADAPTER = MODEL_ADAPTERS["stable-hair"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,13 +61,28 @@ class ValidatePortraitRequest(BaseModel):
     validationOptions: ValidationOptions = Field(default_factory=ValidationOptions)
 
 
+class ValidateHairReferenceRequest(BaseModel):
+    hairReferenceBase64: str
+    strictness: float = Field(default=0.5, ge=0, le=1)
+
+
 class GenerateHairstyleRequest(BaseModel):
+    model: str = "stable-hair"
     portraitBase64: str
+    hairReferenceBase64: str | None = None
     hairstylePrompt: str = ""
     negativePrompt: str = ""
     identityStrength: float = 0.88
     editStrength: float = 0.52
     composedPrompt: str = ""
+    executeModel: bool = False
+    step: int = Field(default=30, ge=1, le=80)
+    guidanceScale: float = Field(default=1.5, ge=0, le=10)
+    controlnetConditioningScale: float = Field(default=1.0, ge=0, le=3)
+    hairEncoderScale: float = Field(default=1.0, ge=0, le=3)
+    size: int = Field(default=512, ge=256, le=1024)
+    seed: int = -1
+    timeoutSeconds: int = Field(default=1800, ge=30, le=7200)
 
 
 def decode_base64_image(image_base64: str) -> Image.Image:
@@ -68,6 +91,23 @@ def decode_base64_image(image_base64: str) -> Image.Image:
 
     data = base64.b64decode(image_base64)
     return Image.open(BytesIO(data)).convert("RGB")
+
+
+def image_to_data_url(image_path: Path) -> str:
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    suffix = image_path.suffix.lower()
+    mime = "image/png" if suffix == ".png" else "image/jpeg"
+    return f"data:{mime};base64,{encoded}"
+
+
+def save_request_image(image_base64: str, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = decode_base64_image(image_base64)
+    image.save(path, quality=95)
+
+
+def tail_text(text: str, max_chars: int = 6000) -> str:
+    return text[-max_chars:]
 
 
 def clamp_score(value: float) -> float:
@@ -416,6 +456,105 @@ def validate_portrait(payload: ValidatePortraitRequest) -> dict[str, Any]:
     return result
 
 
+def validate_hair_reference(payload: ValidateHairReferenceRequest) -> dict[str, Any]:
+    strictness = payload.strictness
+    image = decode_base64_image(payload.hairReferenceBase64)
+    threshold = thresholds(strictness)
+
+    brightness = estimate_brightness(image)
+    clarity = estimate_clarity(image)
+    min_dimension = min(image.width, image.height)
+    face_result = detect_faces(image, strictness)
+    face_count = face_result["faceCount"]
+
+    checks: list[dict[str, str]] = []
+    issues: list[dict[str, str]] = []
+    suggestions: list[dict[str, str]] = []
+
+    if min_dimension < threshold["min_size_block"]:
+        issues.append(issue("REFERENCE_LOW_RESOLUTION", "发型参考图分辨率极低，无法稳定提取发型。"))
+        checks.append(check("参考图分辨率", "fail", f"{image.width}x{image.height}"))
+    elif min_dimension < 512:
+        suggestions.append(issue("REFERENCE_RESOLUTION_WARN", "建议使用短边 512px 以上的发型参考图。"))
+        checks.append(check("参考图分辨率", "warn", f"{image.width}x{image.height}；建议短边 >= 512"))
+    else:
+        checks.append(check("参考图分辨率", "pass", f"{image.width}x{image.height}"))
+
+    if brightness < threshold["brightness_block"]:
+        issues.append(issue("REFERENCE_TOO_DARK", "发型参考图严重过暗。"))
+        checks.append(check("参考图光照", "fail", f"{brightness:.2f}"))
+    elif brightness < threshold["brightness_warn"]:
+        suggestions.append(issue("REFERENCE_BRIGHTNESS_WARN", "发型参考图偏暗，可能影响发色和纹理。"))
+        checks.append(check("参考图光照", "warn", f"{brightness:.2f}"))
+    else:
+        checks.append(check("参考图光照", "pass", f"{brightness:.2f}"))
+
+    if clarity < threshold["clarity_block"]:
+        issues.append(issue("REFERENCE_BLURRY", "发型参考图严重模糊。"))
+        checks.append(check("参考图清晰度", "fail", f"{clarity:.2f}"))
+    elif clarity < threshold["clarity_warn"]:
+        suggestions.append(issue("REFERENCE_CLARITY_WARN", "发型参考图略模糊，发丝细节可能丢失。"))
+        checks.append(check("参考图清晰度", "warn", f"{clarity:.2f}"))
+    else:
+        checks.append(check("参考图清晰度", "pass", f"{clarity:.2f}"))
+
+    if face_count == 0:
+        issues.append(issue("REFERENCE_NO_HEAD", "参考图中未检测到稳定的人脸/头部；当前 POC 需要可定位的发型参考人像。"))
+        checks.append(check("参考图头部定位", "fail", "0 张脸"))
+    elif face_count > 1:
+        suggestions.append(issue("REFERENCE_MULTIPLE_PEOPLE", "参考图检测到多张脸；后续会默认使用最大主体，建议改用单人发型参考图。"))
+        checks.append(check("参考图头部定位", "warn", f"{face_count} 张脸"))
+    else:
+        checks.append(check("参考图头部定位", "pass", "1 张脸"))
+
+    hair_crop_risk = None
+    reference_face_size = None
+    faces = face_result["faces"]
+    if faces:
+        bbox = faces[0]["bbox"]
+        reference_face_size = clamp_score(bbox["height"] / 0.45)
+        estimated_hair_top = bbox["y"] - bbox["height"] * 0.45
+        estimated_hair_left = bbox["x"] - bbox["width"] * 0.28
+        estimated_hair_right = bbox["x"] + bbox["width"] * 1.28
+        hair_crop_risk = max(
+            0.0,
+            -estimated_hair_top,
+            -estimated_hair_left,
+            estimated_hair_right - 1.0,
+        )
+
+        if hair_crop_risk > 0.12:
+            issues.append(issue("REFERENCE_HAIR_CROPPED", "参考发型可能被图片边缘严重裁切。"))
+            checks.append(check("参考发型完整度", "fail", f"裁切风险 {hair_crop_risk:.2f}"))
+        elif hair_crop_risk > 0:
+            suggestions.append(issue("REFERENCE_HAIR_CROP_WARN", "参考发型靠近图片边缘；建议使用头顶和两侧留白更多的图片。"))
+            checks.append(check("参考发型完整度", "warn", f"裁切风险 {hair_crop_risk:.2f}"))
+        else:
+            checks.append(check("参考发型完整度", "pass", "头顶/两侧有基础留白"))
+
+        if bbox["height"] < threshold["face_height_ratio_block"]:
+            suggestions.append(issue("REFERENCE_HEAD_TOO_SMALL", "参考图主体偏小；建议使用头发更清晰的近景参考。"))
+            checks.append(check("参考图主体大小", "warn", f"脸部高度占图 {bbox['height']:.0%}"))
+        else:
+            checks.append(check("参考图主体大小", "pass", f"脸部高度占图 {bbox['height']:.0%}"))
+
+    checks.append(check("Hair Segmentation", "warn", "TODO：后续接入 face parsing / hair mask 后再判断真实头发区域"))
+
+    return {
+        "valid": len(issues) == 0,
+        "faceCount": face_count,
+        "faceDetectionBackend": face_result["detectorBackend"],
+        "referenceFaceSizeScore": reference_face_size,
+        "hairCropRisk": hair_crop_risk,
+        "clarityScore": clarity,
+        "brightnessScore": brightness,
+        "checks": checks,
+        "issues": issues,
+        "suggestions": suggestions,
+        "faces": faces,
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     media_pipe_runtime_error = get_mediapipe_runtime_error()
@@ -429,6 +568,11 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/stable-hair/status")
+def stable_hair_status_endpoint() -> dict[str, Any]:
+    return STABLE_HAIR_ADAPTER.inspect()
+
+
 @app.post("/validate-portrait")
 def validate_portrait_endpoint(payload: ValidatePortraitRequest) -> dict[str, Any]:
     try:
@@ -437,6 +581,92 @@ def validate_portrait_endpoint(payload: ValidatePortraitRequest) -> dict[str, An
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 
+@app.post("/validate-hair-reference")
+def validate_hair_reference_endpoint(payload: ValidateHairReferenceRequest) -> dict[str, Any]:
+    try:
+        return validate_hair_reference(payload)
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
 @app.post("/generate-hairstyle")
 def generate_hairstyle_endpoint(payload: GenerateHairstyleRequest) -> dict[str, Any]:
-    raise HTTPException(status_code=501, detail="发型迁移接口尚未接入具体模型。")
+    if payload.model != "stable-hair":
+        raise HTTPException(status_code=501, detail="当前 POC 只优先接入 stable-hair。")
+
+    if not payload.hairReferenceBase64:
+        raise HTTPException(status_code=400, detail="Stable-Hair 需要发型参考图 hairReferenceBase64。")
+
+    request_id = f"{int(time())}-{uuid4().hex[:8]}"
+    request_dir = UPLOADS_DIR / "stable-hair" / request_id
+    output_dir = OUTPUTS_DIR / "stable-hair" / request_id
+    source_path = request_dir / "source.jpg"
+    reference_path = request_dir / "reference.jpg"
+    result_path = output_dir / "stable_hair_result.jpg"
+
+    save_request_image(payload.portraitBase64, source_path)
+    save_request_image(payload.hairReferenceBase64, reference_path)
+
+    inputs = TransferInputs(
+        source_face=source_path,
+        hair_shape_reference=reference_path,
+        output_dir=output_dir,
+        result_path=result_path,
+    )
+    config_path = STABLE_HAIR_ADAPTER.write_request_config(
+        inputs=inputs,
+        request_dir=request_dir,
+        step=payload.step,
+        guidance_scale=payload.guidanceScale,
+        controlnet_conditioning_scale=payload.controlnetConditioningScale,
+        hair_encoder_scale=payload.hairEncoderScale,
+        size=payload.size,
+        seed=payload.seed,
+    )
+    command = STABLE_HAIR_ADAPTER.build_prepared_command(config_path)
+    adapter_status = STABLE_HAIR_ADAPTER.inspect()
+
+    response: dict[str, Any] = {
+        "model": "stable-hair",
+        "requestId": request_id,
+        "status": "PREPARED" if adapter_status["ready"] else "NOT_CONFIGURED",
+        "message": (
+            "Stable-Hair 请求已准备；显式传 executeModel=true 才会执行。"
+            if adapter_status["ready"]
+            else "Stable-Hair 仓库已接入，但依赖/权重尚未配置完成；当前只保存输入和生成配置。"
+        ),
+        "stableHair": adapter_status,
+        "inputs": {
+            "sourcePath": str(source_path),
+            "referencePath": str(reference_path),
+            "configPath": str(config_path),
+            "outputDir": str(output_dir),
+            "expectedResultPath": str(result_path),
+        },
+        "command": command,
+        "commandText": STABLE_HAIR_ADAPTER.command_text(command),
+        "executed": False,
+    }
+
+    if not adapter_status["ready"] or not payload.executeModel:
+        return response
+
+    process = subprocess.run(
+        command,
+        cwd=adapter_status["repoDir"],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=payload.timeoutSeconds,
+    )
+    response["executed"] = True
+    response["exitCode"] = process.returncode
+    response["stdout"] = tail_text(process.stdout)
+    response["stderr"] = tail_text(process.stderr)
+    response["status"] = "COMPLETED" if process.returncode == 0 and result_path.exists() else "FAILED"
+
+    if result_path.exists():
+        response["resultPath"] = str(result_path)
+        response["resultImageDataUrl"] = image_to_data_url(result_path)
+
+    return response

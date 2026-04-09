@@ -20,7 +20,7 @@ That directory is intentionally git-ignored.
 
 - `BarbershopAdapter`: maps source / shape / color inputs to the upstream `main.py` style command.
 - `HairFastGANAdapter`: maps source / shape / color inputs to upstream `main.py` and writes one result path.
-- `StableHairAdapter`: placeholder only. Upstream `infer_full.py` is config-heavy; keep it behind a backend route instead of calling it directly from the browser.
+- `StableHairAdapter`: inspects repo / runner / required weights, writes per-request yaml config, and builds a backend runner command.
 
 ## Important runtime gap
 
@@ -69,6 +69,12 @@ bash scripts/run_backend.sh
 
 It currently implements `POST /validate-portrait`.
 
+It also implements:
+
+- `GET /stable-hair/status`
+- `POST /validate-hair-reference`
+- `POST /generate-hairstyle`
+
 Current status:
 
 - basic file payload decode
@@ -110,3 +116,69 @@ sudo apt install libgles2
 ```
 
 Until then, `/validate-portrait` falls back to OpenCV Haar face detection.
+
+## Stable-Hair integration
+
+The browser never calls Stable-Hair directly.
+
+Current flow:
+
+1. Frontend uploads portrait A to `POST /validate-portrait`.
+2. Frontend uploads hair reference B to `POST /validate-hair-reference`.
+3. Frontend uploads portrait A and hair reference B to `POST /generate-hairstyle`.
+4. Backend saves inputs under `uploads/stable-hair/<request-id>/`.
+5. Backend writes a prepared `hair_transfer.yaml`.
+6. Backend returns `commandText`.
+7. Real model execution is skipped unless the API payload explicitly sets `executeModel: true`.
+
+Status check:
+
+```bash
+curl http://127.0.0.1:8000/stable-hair/status
+```
+
+Required upstream weights:
+
+```text
+external_models/Stable-Hair/models/stage1/pytorch_model.bin
+external_models/Stable-Hair/models/stage2/pytorch_model.bin
+external_models/Stable-Hair/models/stage2/pytorch_model_1.bin
+external_models/Stable-Hair/models/stage2/pytorch_model_2.bin
+```
+
+Recommended dependency boundary:
+
+```bash
+cd /mnt/d/GitProject/TryMyHair/external_models/Stable-Hair
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+If you use another Python environment, start FastAPI with:
+
+```bash
+export STABLE_HAIR_PYTHON=/path/to/stable-hair/python
+bash scripts/run_backend.sh
+```
+
+`/stable-hair/status` also checks whether that Python can import `torch`, `diffusers`, and `omegaconf`.
+
+## Hair reference validation
+
+Current `POST /validate-hair-reference` is a lightweight gate for reference image B.
+
+It checks:
+
+- image decode
+- resolution
+- brightness
+- clarity proxy
+- face/head detection
+- multi-face warning
+- hair crop risk proxy based on face box
+
+TODO:
+
+- replace crop-risk proxy with real hair segmentation / face parsing
+- return a visual hair mask preview
+- validate hair area, hair border contact, occluders, and dominant hair color
