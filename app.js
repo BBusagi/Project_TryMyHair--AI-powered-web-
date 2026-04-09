@@ -183,17 +183,17 @@ function applyValidationResult(result) {
   showIssues(
     issuesList,
     result.issues || [],
-    result.valid ? "后端检测通过" : "后端未返回问题列表",
+    result.valid ? "未发现阻断问题" : "后端未返回阻断问题列表",
   );
 
   if (result.valid) {
     setBadge("后端检测通过", "success");
-    statusText.textContent = "图片满足后端 validatePortrait 的当前规则";
+    statusText.textContent = "未发现阻断问题；警告项可作为拍摄质量建议";
     return;
   }
 
   setBadge("检测失败", "danger");
-  statusText.textContent = "图片不符合后端 validatePortrait 的输入要求";
+  statusText.textContent = "图片存在阻断问题，暂不建议进入发型迁移";
   showErrorModal(result.issues || []);
 }
 

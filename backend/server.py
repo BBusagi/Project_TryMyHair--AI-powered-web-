@@ -106,13 +106,19 @@ def check(label: str, status: str, detail: str) -> dict[str, str]:
 
 def thresholds(strictness: float) -> dict[str, float]:
     return {
-        "min_size": 512 if strictness > 0.75 else 320,
-        "brightness": 0.18 + strictness * 0.12,
-        "clarity": 0.08 + strictness * 0.08,
-        "face_height_ratio": 0.2 + strictness * 0.08,
-        "frontal": 0.45 + strictness * 0.15,
-        "headroom": 0.015 + strictness * 0.025,
-        "media_pipe_confidence": 0.45 + strictness * 0.2,
+        "min_size_warn": 512 if strictness > 0.8 else 320,
+        "min_size_block": 192,
+        "brightness_warn": 0.14 + strictness * 0.1,
+        "brightness_block": 0.08,
+        "clarity_warn": 0.05 + strictness * 0.07,
+        "clarity_block": 0.035,
+        "face_height_ratio_warn": 0.16 + strictness * 0.06,
+        "face_height_ratio_block": 0.1,
+        "frontal_warn": 0.35 + strictness * 0.12,
+        "frontal_block": 0.15,
+        "headroom_warn": 0.01 + strictness * 0.02,
+        "large_secondary_face": 0.14,
+        "media_pipe_confidence": 0.32 + strictness * 0.18,
     }
 
 
@@ -263,15 +269,24 @@ def add_face_detection_result(
     result["faceCount"] = face_count
     result["faces"] = face_result["faces"]
     result["faceDetectionBackend"] = face_result["detectorBackend"]
+    threshold = thresholds(strictness)
 
     if face_count == 0:
         issues.append(issue("NO_FACE_DETECTED", "未检测到有效人脸。"))
         checks.append(check("Face Detection", "fail", "0 张脸"))
         return
 
-    if face_count > 1:
-        issues.append(issue("MULTIPLE_PEOPLE", f"检测到 {face_count} 张脸，当前仅支持单人肖像。"))
-        checks.append(check("是否单人", "fail", f"{face_count} 张脸"))
+    large_faces = [
+        face
+        for face in face_result["faces"]
+        if face["bbox"]["height"] >= threshold["large_secondary_face"]
+    ]
+
+    if len(large_faces) > 1:
+        issues.append(issue("MULTIPLE_PEOPLE", f"检测到 {len(large_faces)} 张主要人脸，当前仅支持单人肖像。"))
+        checks.append(check("是否单人", "fail", f"{len(large_faces)} 张主要人脸"))
+    elif face_count > 1:
+        checks.append(check("是否单人", "warn", f"检测到 {face_count} 张脸；仅 1 张主要人脸"))
     else:
         checks.append(check("是否单人", "pass", "1 张脸"))
 
@@ -282,29 +297,31 @@ def add_face_detection_result(
     frontal_score = largest_face["frontalScore"]
     headroom = bbox["y"]
     headroom_score = clamp_score(headroom / 0.15)
-    threshold = thresholds(strictness)
 
     result["faceSizeScore"] = face_size_score
     result["frontalScore"] = frontal_score
     result["headroomScore"] = headroom_score
 
-    if face_height_ratio < threshold["face_height_ratio"]:
-        issues.append(issue("FACE_TOO_SMALL", "脸部在画面中太小，后续对齐和迁移会不稳定。"))
+    if face_height_ratio < threshold["face_height_ratio_block"]:
+        issues.append(issue("FACE_TOO_SMALL", "脸部在画面中极小，后续对齐和迁移会不稳定。"))
         checks.append(check("脸是否足够大", "fail", f"脸部高度占图 {face_height_ratio:.0%}"))
+    elif face_height_ratio < threshold["face_height_ratio_warn"]:
+        checks.append(check("脸是否足够大", "warn", f"偏小；脸部高度占图 {face_height_ratio:.0%}"))
     else:
         checks.append(check("脸是否足够大", "pass", f"脸部高度占图 {face_height_ratio:.0%}"))
 
     if frontal_score is None:
         checks.append(check("是否正脸/近正脸", "warn", "MediaPipe detection 未返回足够关键点"))
-    elif frontal_score < threshold["frontal"]:
+    elif frontal_score < threshold["frontal_block"]:
         issues.append(issue("PROFILE_TOO_STRONG", "侧脸角度过大，建议上传更正面的肖像。"))
         checks.append(check("是否正脸/近正脸", "fail", f"{frontal_score:.2f}"))
+    elif frontal_score < threshold["frontal_warn"]:
+        checks.append(check("是否正脸/近正脸", "warn", f"{frontal_score:.2f}；姿态可能影响迁移"))
     else:
         checks.append(check("是否正脸/近正脸", "pass", f"{frontal_score:.2f}"))
 
-    if headroom < threshold["headroom"]:
-        issues.append(issue("HEAD_TOP_CUT", "脸框距离画面顶部过近；请换一张头顶留有空间的照片。"))
-        checks.append(check("头顶是否被截断", "fail", f"脸框上边距 {headroom:.0%}"))
+    if headroom < threshold["headroom_warn"]:
+        checks.append(check("头顶是否被截断", "warn", f"脸框上边距 {headroom:.0%}；建议保留头发上方空间"))
     else:
         checks.append(check("头顶是否被截断", "pass", f"脸框上边距 {headroom:.0%}"))
 
@@ -327,18 +344,28 @@ def validate_portrait(payload: ValidatePortraitRequest) -> dict[str, Any]:
     issues: list[dict[str, str]] = []
     checks: list[dict[str, str]] = []
 
-    resolution_ok = image.width >= threshold["min_size"] and image.height >= threshold["min_size"]
-    brightness_ok = brightness >= threshold["brightness"]
-    clarity_ok = clarity >= threshold["clarity"]
+    min_dimension = min(image.width, image.height)
+    resolution_status = "pass"
+    brightness_status = "pass"
+    clarity_status = "pass"
 
-    if not resolution_ok:
-        issues.append(issue("LOW_RESOLUTION", "图片分辨率过低，建议上传更清晰的肖像图。"))
+    if min_dimension < threshold["min_size_block"]:
+        resolution_status = "fail"
+        issues.append(issue("LOW_RESOLUTION", "图片分辨率极低，建议上传更清晰的肖像图。"))
+    elif min_dimension < threshold["min_size_warn"]:
+        resolution_status = "warn"
 
-    if not brightness_ok:
-        issues.append(issue("TOO_DARK", "画面光照过暗，建议换一张明亮、均匀照明的肖像。"))
+    if brightness < threshold["brightness_block"]:
+        brightness_status = "fail"
+        issues.append(issue("TOO_DARK", "画面严重过暗，建议换一张明亮、均匀照明的肖像。"))
+    elif brightness < threshold["brightness_warn"]:
+        brightness_status = "warn"
 
-    if not clarity_ok:
-        issues.append(issue("BLURRY_IMAGE", "图片清晰度不足，存在明显模糊。"))
+    if clarity < threshold["clarity_block"]:
+        clarity_status = "fail"
+        issues.append(issue("BLURRY_IMAGE", "图片严重模糊，人脸检测或迁移可能失败。"))
+    elif clarity < threshold["clarity_warn"]:
+        clarity_status = "warn"
 
     result: dict[str, Any] = {
         "valid": False,
@@ -379,9 +406,9 @@ def validate_portrait(payload: ValidatePortraitRequest) -> dict[str, Any]:
     checks.extend(
         [
             check("是否有大面积遮挡", "warn", "当前由后续 landmark / parsing / VLM 再确认"),
-            check("光照是否过暗", "pass" if brightness_ok else "fail", f"{brightness:.2f}"),
-            check("分辨率是否太低", "pass" if resolution_ok else "fail", f"{image.width}x{image.height}"),
-            check("是否明显模糊", "pass" if clarity_ok else "fail", f"{clarity:.2f}"),
+            check("光照是否过暗", brightness_status, f"{brightness:.2f}"),
+            check("分辨率是否太低", resolution_status, f"{image.width}x{image.height}"),
+            check("是否明显模糊", clarity_status, f"{clarity:.2f}"),
         ]
     )
 
