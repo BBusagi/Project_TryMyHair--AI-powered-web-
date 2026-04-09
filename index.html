@@ -253,6 +253,11 @@
             </button>
           </div>
 
+          <label class="checkbox-row subtle-state">
+            <input id="executeStableHairToggle" type="checkbox" />
+            <span>真实执行 Stable-Hair 推理；未勾选时只保存输入并生成 config</span>
+          </label>
+
           <div class="validate-layout">
             <div class="preview-card">
               <h3>参考发型预览</h3>
@@ -292,6 +297,12 @@
                 <pre><code id="stableHairResponseText">暂无响应</code></pre>
               </details>
             </div>
+          </div>
+
+          <div id="stableHairResultPanel" class="preview-card result-image-card" hidden>
+            <h3>Stable-Hair 结果</h3>
+            <p class="empty-text">模型执行成功后，这里会显示官方拼接图：源图 / bald 中间图 / 参考图 / 迁移结果。</p>
+            <img id="stableHairResultPreview" alt="Stable-Hair 生成结果" />
           </div>
 
           <div class="info-block compact-model-note">

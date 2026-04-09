@@ -649,6 +649,8 @@ def generate_hairstyle_endpoint(payload: GenerateHairstyleRequest) -> dict[str, 
     }
 
     if not adapter_status["ready"] or not payload.executeModel:
+        if payload.executeModel and not adapter_status["ready"]:
+            response["message"] = "已请求真实执行，但 Stable-Hair 环境尚未 ready；后端未启动模型进程。"
         return response
 
     process = subprocess.run(

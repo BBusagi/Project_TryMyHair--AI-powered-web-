@@ -10,6 +10,7 @@ const validateEndpointInput = document.getElementById("validateEndpointInput");
 const hairReferenceEndpointInput = document.getElementById("hairReferenceEndpointInput");
 const generateEndpointInput = document.getElementById("generateEndpointInput");
 const validateHairReferenceButton = document.getElementById("validateHairReferenceButton");
+const executeStableHairToggle = document.getElementById("executeStableHairToggle");
 const mockToggle = document.getElementById("mockToggle");
 const faceDetectionOption = document.getElementById("faceDetectionOption");
 const landmarkOption = document.getElementById("landmarkOption");
@@ -21,6 +22,8 @@ const portraitPreview = document.getElementById("portraitPreview");
 const portraitEmpty = document.getElementById("portraitEmpty");
 const referenceHairPreview = document.getElementById("referenceHairPreview");
 const referenceHairEmpty = document.getElementById("referenceHairEmpty");
+const stableHairResultPanel = document.getElementById("stableHairResultPanel");
+const stableHairResultPreview = document.getElementById("stableHairResultPreview");
 
 const validationBadge = document.getElementById("validationBadge");
 const stableHairStatusBadge = document.getElementById("stableHairStatusBadge");
@@ -157,6 +160,8 @@ function resetStableHairInput() {
   referenceHairPreview.src = "";
   referenceHairPreview.style.display = "none";
   referenceHairEmpty.hidden = false;
+  stableHairResultPreview.src = "";
+  stableHairResultPanel.hidden = true;
   showHairReferenceChecks([]);
   setHairReferenceSummary("等待检测", "上传发型参考图 B 后，点击“检测发型参考图”。", "neutral");
 }
@@ -292,7 +297,7 @@ async function prepareStableHairViaApi() {
     model: "stable-hair",
     portraitBase64: getBase64Payload(state.portraitDataUrl),
     hairReferenceBase64: getBase64Payload(state.referenceHairDataUrl),
-    executeModel: false,
+    executeModel: executeStableHairToggle.checked,
     step: 30,
     guidanceScale: 1.5,
     controlnetConditioningScale: 1,
@@ -586,8 +591,16 @@ async function handlePrepareStableHair() {
     return;
   }
 
-  setStableHairBadge("准备中", "warning");
-  setStableHairSummary("准备请求中", "正在上传用户图和参考发型图，后端会生成 Stable-Hair 配置。", "warning");
+  stableHairResultPanel.hidden = true;
+  stableHairResultPreview.src = "";
+  setStableHairBadge(executeStableHairToggle.checked ? "执行中" : "准备中", "warning");
+  setStableHairSummary(
+    executeStableHairToggle.checked ? "模型执行中" : "准备请求中",
+    executeStableHairToggle.checked
+      ? "正在运行 Stable-Hair；512px 扩散模型可能需要数分钟。"
+      : "正在上传用户图和参考发型图，后端会生成 Stable-Hair 配置。",
+    "warning",
+  );
 
   try {
     const result = await prepareStableHairViaApi();
@@ -596,7 +609,26 @@ async function handlePrepareStableHair() {
 
     if (result.status === "NOT_CONFIGURED") {
       setStableHairBadge("请求已准备", "warning");
-      setStableHairSummary("请求已准备，模型待配置", `输入和 config 已保存；缺少 ${result.stableHair.missingWeights.length} 个权重。`, "warning");
+      setStableHairSummary(
+        "请求已准备，模型待配置",
+        `输入和 config 已保存；缺少 ${result.stableHair.missingWeights.length} 个权重，Python 依赖状态：${result.stableHair.pythonDependenciesOk ? "OK" : "未就绪"}。`,
+        "warning",
+      );
+      return;
+    }
+
+    if (result.status === "COMPLETED" && result.resultImageDataUrl) {
+      stableHairResultPreview.src = result.resultImageDataUrl;
+      stableHairResultPreview.style.display = "block";
+      stableHairResultPanel.hidden = false;
+      setStableHairBadge("生成完成", "success");
+      setStableHairSummary("Stable-Hair 生成完成", "后端已返回结果图。下面显示官方拼接结果。", "success");
+      return;
+    }
+
+    if (result.status === "FAILED") {
+      setStableHairBadge("执行失败", "danger");
+      setStableHairSummary("Stable-Hair 执行失败", "查看“最近一次 Stable-Hair 响应”里的 stderr/stdout。", "danger");
       return;
     }
 

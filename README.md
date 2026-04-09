@@ -345,6 +345,27 @@ external_models/
 export STABLE_HAIR_PYTHON=/path/to/stable-hair/python
 ```
 
+推荐配置顺序：
+
+```bash
+cd /mnt/d/GitProject/TryMyHair
+
+# 1. 安装 Stable-Hair 专用环境；不要装进后端 .venv
+bash scripts/setup_stable_hair_env.sh
+
+# 2. 从官方 Google Drive 下载权重后，复制到 expected layout
+bash scripts/install_stable_hair_weights.sh /path/to/downloaded/Stable-Hair-weights
+
+# 3. 本地检查 Python / CUDA / 权重
+bash scripts/check_stable_hair.sh
+
+# 4. 重启后端，再在页面点击“检查 Stable-Hair 状态”
+bash scripts/run_backend.sh
+```
+
+权重来源以 `external_models/Stable-Hair/README.md` 里的官方 Google Drive 为准。
+因为 Google Drive 文件夹不是稳定直链，本项目暂时不自动下载这几个大权重。
+
 ## 当前推荐开发路径
 
 1. `validatePortrait`

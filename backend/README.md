@@ -149,10 +149,13 @@ external_models/Stable-Hair/models/stage2/pytorch_model_2.bin
 Recommended dependency boundary:
 
 ```bash
-cd /mnt/d/GitProject/TryMyHair/external_models/Stable-Hair
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+cd /mnt/d/GitProject/TryMyHair
+bash scripts/setup_stable_hair_env.sh
 ```
+
+The setup script filters the upstream `torch` / `torchvision` / `xformers` pins and installs a CUDA 11.8 inference stack first.
+It intentionally uses `torchvision==0.17.2+cu118` with `torch==2.2.2+cu118`.
+It installs `xformers==0.0.25.post1` without the unavailable `+cu118` package suffix.
 
 If you use another Python environment, start FastAPI with:
 
@@ -162,6 +165,16 @@ bash scripts/run_backend.sh
 ```
 
 `/stable-hair/status` also checks whether that Python can import `torch`, `diffusers`, and `omegaconf`.
+
+After downloading the official weights:
+
+```bash
+cd /mnt/d/GitProject/TryMyHair
+bash scripts/install_stable_hair_weights.sh /path/to/downloaded/Stable-Hair-weights
+bash scripts/check_stable_hair.sh
+```
+
+If all checks pass, restart FastAPI and use `executeModel: true` in `POST /generate-hairstyle`.
 
 ## Hair reference validation
 
