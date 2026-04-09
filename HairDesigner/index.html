@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="HairDesigner POC：先做肖像输入校验，再对比 Barbershop、HairFastGAN、Stable-Hair 的输入要求。"
+    />
+    <title>HairDesigner POC</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">HairDesigner POC</p>
+          <h1>发型迁移输入条件验证</h1>
+          <p class="hero-copy">
+            当前阶段先验证用户图片是否适合作为后续发型迁移模型输入，并把 Barbershop、HairFastGAN、Stable-Hair
+            的输入要求拆成独立面板展示。
+          </p>
+        </div>
+        <div class="hero-tips">
+          <span>POC 页面</span>
+          <span>输入门控</span>
+          <span>模型对比</span>
+        </div>
+      </header>
+
+      <main class="poc-grid">
+        <section class="panel feature-panel validate-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-index">Panel 1</p>
+              <h2>`validatePortrait`</h2>
+              <p>检测上传图片是否满足后续迁移模型的基础输入要求。</p>
+            </div>
+            <span id="validationBadge" class="badge neutral">待检测</span>
+          </div>
+
+          <label class="input-group">
+            <span>用户图片 A</span>
+            <input id="portraitInput" type="file" accept="image/*" />
+          </label>
+
+          <div class="rule-box">
+            <p class="rule-title">当前拦截目标</p>
+            <ul class="rule-list">
+              <li>必须能稳定识别到单人肖像</li>
+              <li>正脸或近正脸，脸部区域足够大</li>
+              <li>头顶、额头、脸部主体不应被裁切</li>
+              <li>不允许明显模糊、过暗、低分辨率</li>
+              <li>不允许多人、大面积遮挡或侧脸角度过大</li>
+            </ul>
+          </div>
+
+          <div class="slider-group">
+            <label for="strictnessRange">校验严格度</label>
+            <div class="slider-row">
+              <input
+                id="strictnessRange"
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value="0.7"
+              />
+              <output id="strictnessValue">0.70</output>
+            </div>
+          </div>
+
+          <label class="checkbox-row">
+            <input id="mockToggle" type="checkbox" disabled />
+            <span>前端只做文件校验；肖像质量检测统一走后端</span>
+          </label>
+
+          <div class="validation-options">
+            <p class="rule-title">后端校验步骤</p>
+            <label class="checkbox-row option-row">
+              <input id="faceDetectionOption" type="checkbox" checked />
+              <span>Face Detection：后端确认是否单人、是否有人脸、脸框位置和脸部大小</span>
+            </label>
+            <label class="checkbox-row option-row is-disabled">
+              <input id="landmarkOption" type="checkbox" disabled />
+              <span>Landmark / Face Alignment：迁移模型内部通常会做；当前 POC 暂不单独开启</span>
+            </label>
+            <label class="checkbox-row option-row is-disabled">
+              <input id="segmentationOption" type="checkbox" disabled />
+              <span>Hair Segmentation / Face Parsing：迁移模型内部通常会做；当前 POC 暂不单独开启</span>
+            </label>
+          </div>
+
+          <label class="input-group">
+            <span>检测接口</span>
+            <input
+              id="validateEndpointInput"
+              type="url"
+              value="http://127.0.0.1:8000/validate-portrait"
+              placeholder="http://127.0.0.1:8000/validate-portrait"
+            />
+          </label>
+
+          <div class="action-row">
+            <button id="validateButton" type="button" class="primary-button">
+              开始检测
+            </button>
+            <button id="resetButton" type="button" class="secondary-button">
+              重置
+            </button>
+          </div>
+
+          <div class="validate-layout">
+            <div class="preview-card">
+              <h3>图片预览</h3>
+              <img id="portraitPreview" alt="用户图片预览" />
+              <p id="portraitEmpty" class="empty-text">未上传图片</p>
+            </div>
+
+            <div class="metrics-card">
+              <h3>检测指标</h3>
+              <div class="metric-grid">
+                <div class="metric-item">
+                  <span>人脸数量</span>
+                  <strong id="faceCountValue">-</strong>
+                </div>
+                <div class="metric-item">
+                  <span>脸部尺寸</span>
+                  <strong id="faceSizeValue">-</strong>
+                </div>
+                <div class="metric-item">
+                  <span>正脸置信</span>
+                  <strong id="frontalScoreValue">-</strong>
+                </div>
+                <div class="metric-item">
+                  <span>清晰度</span>
+                  <strong id="clarityScoreValue">-</strong>
+                </div>
+                <div class="metric-item">
+                  <span>光照亮度</span>
+                  <strong id="brightnessScoreValue">-</strong>
+                </div>
+                <div class="metric-item">
+                  <span>头顶安全距离</span>
+                  <strong id="headroomScoreValue">-</strong>
+                </div>
+                <div class="metric-item">
+                  <span>无遮挡安全分</span>
+                  <strong id="occlusionScoreValue">-</strong>
+                </div>
+              </div>
+
+              <div class="checks-panel">
+                <h3>硬规则覆盖</h3>
+                <ul id="ruleCheckList" class="check-list">
+                  <li>尚未执行检测</li>
+                </ul>
+              </div>
+
+              <div class="issues-panel">
+                <div class="issues-head">
+                  <h3>问题列表</h3>
+                  <span id="statusText" class="inline-status">上传图片后调用后端检测</span>
+                </div>
+                <ul id="issuesList" class="issues-list">
+                  <li>尚未执行检测</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="api-box">
+            <h3>预留接口结构</h3>
+            <pre><code>{
+  "portraitBase64": "...",
+  "strictness": 0.7
+}
+
+{
+  "valid": false,
+  "faceCount": 2,
+  "faceSizeScore": 0.2,
+  "frontalScore": 0.35,
+  "clarityScore": 0.41,
+  "brightnessScore": 0.62,
+  "headroomScore": 0.1,
+  "occlusionScore": 0.72,
+  "checks": [
+    { "label": "是否单人", "status": "fail", "detail": "2 张脸" }
+  ],
+  "issues": [
+    { "code": "MULTIPLE_PEOPLE", "message": "检测到多人" }
+  ]
+}</code></pre>
+          </div>
+        </section>
+
+        <section class="panel feature-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-index">Panel 2</p>
+              <h2>Barbershop 需要什么输入</h2>
+              <p>典型的三图发型迁移方案，对输入对齐要求较高。</p>
+            </div>
+            <span class="badge accent">三图输入</span>
+          </div>
+
+          <div class="info-block">
+            <h3>核心输入</h3>
+            <ul class="rule-list">
+              <li>`im_path1`：Identity image，目标人物</li>
+              <li>`im_path2`：Structure image，提供发型结构</li>
+              <li>`im_path3`：Appearance image，提供发色和纹理</li>
+            </ul>
+          </div>
+
+          <div class="info-block">
+            <h3>前置要求</h3>
+            <ul class="rule-list">
+              <li>原图先放入 `unprocessed`，再运行 `align_face.py`</li>
+              <li>输出进入 `input/face`，默认是对齐后的人脸图</li>
+              <li>官方流程依赖标准化的人脸裁剪，输入应尽量是完整、清晰、单人的正脸或近正脸照片</li>
+            </ul>
+          </div>
+
+          <div class="info-block">
+            <h3>对前端校验的含义</h3>
+            <ul class="rule-list">
+              <li>需要提前拦截多人图</li>
+              <li>需要提前拦截不完整构图和严重遮挡</li>
+              <li>需要保证后续 face align 可稳定执行</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="panel feature-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-index">Panel 3</p>
+              <h2>HairFastGAN 需要什么输入</h2>
+              <p>工程接入最友好，但仍然要求单人肖像和可对齐的人脸。</p>
+            </div>
+            <span class="badge accent">三图输入 + 可自动对齐</span>
+          </div>
+
+          <div class="info-block">
+            <h3>核心输入</h3>
+            <ul class="rule-list">
+              <li>`face_path`：目标人物脸</li>
+              <li>`shape_path`：发型形状来源</li>
+              <li>`color_path`：发色来源</li>
+            </ul>
+          </div>
+
+          <div class="info-block">
+            <h3>支持形式</h3>
+            <ul class="rule-list">
+              <li>文件路径</li>
+              <li>`PIL Image`</li>
+              <li>`numpy.ndarray`</li>
+              <li>`Tensor`</li>
+            </ul>
+          </div>
+
+          <div class="info-block">
+            <h3>前置要求</h3>
+            <ul class="rule-list">
+              <li>可先运行 `scripts/align_face.py`，或在调用时传 `align=true`</li>
+              <li>脚本默认取最大的人脸，多人场景不适合作为标准输入</li>
+              <li>因此仍然需要前端先拦截多人、无脸、模糊、遮挡和构图异常</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="panel feature-panel stable-hair-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-index">Panel 4</p>
+              <h2>Stable-Hair 需要什么输入</h2>
+              <p>基于扩散模型的两阶段方案：先去除源人物头发，再把参考发型迁移到 bald image 上。</p>
+            </div>
+            <span class="badge accent">源人像 + 参考发型</span>
+          </div>
+
+          <div class="info-block">
+            <h3>核心输入</h3>
+            <ul class="rule-list">
+              <li>`id_image` / `source_image`：用户提供的人脸图，作为身份和背景来源</li>
+              <li>`ref_hair` / `reference_image`：带有目标发型的参考图</li>
+              <li>`source_image_bald`：第一阶段 Bald Converter 生成的无发/去发中间图</li>
+            </ul>
+          </div>
+
+          <div class="info-block">
+            <h3>官方 demo 参数</h3>
+            <ul class="rule-list">
+              <li>`Converter Scale`：去发阶段强度</li>
+              <li>`Hair Encoder Scale`：参考发型编码强度</li>
+              <li>`CFG`：扩散模型 guidance scale</li>
+              <li>`Latent IdentityNet Scale`：身份和背景保持相关的控制强度</li>
+            </ul>
+          </div>
+
+          <div class="info-block">
+            <h3>前置要求</h3>
+            <ul class="rule-list">
+              <li>官方 demo 会把源图和参考发型图 resize 到 `512x512`</li>
+              <li>官方说明里提到 aligned faces 效果更好</li>
+              <li>公开模型训练中的脸图来自 FFHQ，意味着主要是裁剪、对齐后的脸</li>
+              <li>第一阶段 bald converter 效果会直接影响最终发型迁移质量</li>
+            </ul>
+          </div>
+
+          <div class="info-block">
+            <h3>对前端校验的含义</h3>
+            <ul class="rule-list">
+              <li>除了检测用户图片 A，也应检测发型参考图 B 是否包含清晰头发区域</li>
+              <li>用户图片 A 最好是单人、清晰、可对齐的近景肖像</li>
+              <li>后端最好返回 bald preview，方便判断第一阶段是否失败</li>
+            </ul>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="errorModal" hidden>
+      <div class="error-modal">
+        <div class="modal-head">
+          <h3>图片不符合输入要求</h3>
+          <button id="closeModalButton" type="button" class="icon-button" aria-label="关闭">×</button>
+        </div>
+        <p id="modalSummary">请更换图片后再试。</p>
+        <ul id="modalIssues" class="issues-list"></ul>
+      </div>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
