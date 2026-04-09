@@ -95,21 +95,20 @@
 
 已经新增一个最小本地后端：
 
-- [backend/server.py](/mnt/d/GitProject/BBusagi/HTML/HairDesigner/backend/server.py)
+- [backend/server.py](/mnt/d/GitProject/TryMyHair/backend/server.py)
 
-启动方式：
+首次配置依赖：
 
 ```bash
-cd HTML/HairDesigner
+cd /mnt/d/GitProject/TryMyHair
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-uvicorn backend.server:app --host 127.0.0.1 --port 8000 --reload
+.venv/bin/python -m pip install -r backend/requirements.txt
 ```
 
-也可以：
+启动后端：
 
 ```bash
+cd /mnt/d/GitProject/TryMyHair
 bash scripts/run_backend.sh
 ```
 
@@ -125,6 +124,7 @@ bash scripts/run_backend.sh
 - 亮度
 - 模糊 proxy
 - MediaPipe Face Detection：安装 `mediapipe` 后启用
+- OpenCV Haar fallback：当 MediaPipe runtime 不可用时使用
 
 它保留了 `checks` 字段，后面可以继续接 MediaPipe / RetinaFace / OpenAI。
 

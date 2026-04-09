@@ -50,15 +50,15 @@ Do not expose model repos or OpenAI keys to static frontend code.
 Install:
 
 ```bash
+cd /mnt/d/GitProject/TryMyHair
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
+.venv/bin/python -m pip install -r backend/requirements.txt
 ```
 
-Run from `HTML/HairDesigner`:
+Run from project root:
 
 ```bash
-uvicorn backend.server:app --host 127.0.0.1 --port 8000 --reload
+.venv/bin/uvicorn backend.server:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Or:
@@ -75,6 +75,38 @@ Current status:
 - brightness proxy
 - blur proxy
 - resolution rule
-- MediaPipe Face Detection when `mediapipe` and `numpy` are installed
+- MediaPipe Face Detection when `mediapipe`, model file, and system graphics runtime are available
+- OpenCV Haar face detection fallback
 
 It intentionally does not yet run landmark alignment or hair segmentation.
+
+## Health check
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+The response includes:
+
+- `mediapipePackageInstalled`
+- `mediapipeModelExists`
+- `mediapipeRuntimeReady`
+- `mediapipeRuntimeError`
+- `opencvInstalled`
+
+## MediaPipe on WSL
+
+In this environment MediaPipe imported successfully, but the Tasks runtime needed an extra system library:
+
+```text
+libGLESv2.so.2
+```
+
+If `/health` reports that error, install the Ubuntu package:
+
+```bash
+sudo apt update
+sudo apt install libgles2
+```
+
+Until then, `/validate-portrait` falls back to OpenCV Haar face detection.

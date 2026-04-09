@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+from ctypes.util import find_library
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -10,14 +12,25 @@ from pydantic import BaseModel, Field
 from PIL import Image, ImageStat
 
 try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
     import mediapipe as mp
     import numpy as np
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
 except ImportError:
     mp = None
     np = None
+    mp_python = None
+    mp_vision = None
 
 
 app = FastAPI(title="HairDesigner Backend POC")
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+MEDIAPIPE_FACE_MODEL_PATH = PROJECT_DIR / "backend/models/blaze_face_short_range.tflite"
 
 app.add_middleware(
     CORSMiddleware,
@@ -103,6 +116,20 @@ def thresholds(strictness: float) -> dict[str, float]:
     }
 
 
+def get_mediapipe_runtime_error() -> str | None:
+    if mp is None or np is None or mp_python is None or mp_vision is None:
+        return "MediaPipe Python package is not installed."
+
+    if not MEDIAPIPE_FACE_MODEL_PATH.exists():
+        return f"MediaPipe face detector model is missing: {MEDIAPIPE_FACE_MODEL_PATH}"
+
+    # MediaPipe Tasks Python loads libmediapipe_c.so, which depends on GLES on Linux.
+    if find_library("GLESv2") is None:
+        return "System library libGLESv2.so.2 is missing. On Ubuntu/WSL install package: libgles2"
+
+    return None
+
+
 def relative_bbox_to_dict(relative_bbox: Any) -> dict[str, float]:
     return {
         "x": clamp_score(relative_bbox.xmin),
@@ -128,40 +155,99 @@ def estimate_frontal_score(relative_keypoints: list[Any]) -> float | None:
     return clamp_score(score)
 
 
-def detect_faces(image: Image.Image, strictness: float) -> dict[str, Any]:
-    if mp is None or np is None:
-        raise RuntimeError(
-            "MediaPipe is not installed. Install backend requirements before enabling Face Detection."
-        )
+def detect_faces_with_mediapipe(image: Image.Image, strictness: float) -> dict[str, Any]:
+    if mp is None or np is None or mp_python is None or mp_vision is None:
+        raise RuntimeError("MediaPipe package is not installed.")
+
+    runtime_error = get_mediapipe_runtime_error()
+    if runtime_error:
+        raise RuntimeError(runtime_error)
 
     threshold = thresholds(strictness)["media_pipe_confidence"]
     image_array = np.asarray(image)
-    face_detection = mp.solutions.face_detection.FaceDetection(
-        model_selection=1,
+
+    options = mp_vision.FaceDetectorOptions(
+        base_options=mp_python.BaseOptions(model_asset_path=str(MEDIAPIPE_FACE_MODEL_PATH)),
+        running_mode=mp_vision.RunningMode.IMAGE,
         min_detection_confidence=threshold,
     )
 
-    with face_detection as detector:
-        results = detector.process(image_array)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_array)
+    with mp_vision.FaceDetector.create_from_options(options) as detector:
+        results = detector.detect(mp_image)
 
     detections = results.detections or []
     faces = []
 
     for detection in detections:
-        location = detection.location_data
-        relative_bbox = location.relative_bounding_box
-        confidence = float(detection.score[0]) if detection.score else 0.0
-        bbox = relative_bbox_to_dict(relative_bbox)
+        box = detection.bounding_box
+        confidence = float(detection.categories[0].score) if detection.categories else 0.0
+        bbox = {
+            "x": clamp_score(box.origin_x / image.width),
+            "y": clamp_score(box.origin_y / image.height),
+            "width": clamp_score(box.width / image.width),
+            "height": clamp_score(box.height / image.height),
+        }
         faces.append(
             {
                 "bbox": bbox,
                 "confidence": confidence,
-                "frontalScore": estimate_frontal_score(list(location.relative_keypoints)),
+                "frontalScore": estimate_frontal_score(detection.keypoints),
             }
         )
 
     faces.sort(key=lambda face: face["bbox"]["width"] * face["bbox"]["height"], reverse=True)
-    return {"faceCount": len(faces), "faces": faces}
+    return {"detectorBackend": "mediapipe", "faceCount": len(faces), "faces": faces}
+
+
+def detect_faces_with_opencv(image: Image.Image, strictness: float) -> dict[str, Any]:
+    if cv2 is None or np is None:
+        raise RuntimeError("OpenCV fallback is not installed.")
+
+    image_array = np.asarray(image)
+    gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    cascade = cv2.CascadeClassifier(cascade_path)
+    raw_faces = cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.08,
+        minNeighbors=5,
+        minSize=(48, 48),
+    )
+
+    faces = []
+    for x, y, width, height in raw_faces:
+        bbox = {
+            "x": clamp_score(float(x) / image.width),
+            "y": clamp_score(float(y) / image.height),
+            "width": clamp_score(float(width) / image.width),
+            "height": clamp_score(float(height) / image.height),
+        }
+        faces.append(
+            {
+                "bbox": bbox,
+                "confidence": None,
+                # Haar frontal cascade is already a frontal-face detector; keep this conservative.
+                "frontalScore": 0.7,
+            }
+        )
+
+    faces.sort(key=lambda face: face["bbox"]["width"] * face["bbox"]["height"], reverse=True)
+    return {"detectorBackend": "opencv-haar", "faceCount": len(faces), "faces": faces}
+
+
+def detect_faces(image: Image.Image, strictness: float) -> dict[str, Any]:
+    try:
+        return detect_faces_with_mediapipe(image, strictness)
+    except Exception as media_pipe_error:
+        try:
+            result = detect_faces_with_opencv(image, strictness)
+            result["fallbackReason"] = str(media_pipe_error)
+            return result
+        except Exception as opencv_error:
+            raise RuntimeError(
+                f"Face detection failed. MediaPipe: {media_pipe_error}; OpenCV: {opencv_error}"
+            ) from opencv_error
 
 
 def add_face_detection_result(
@@ -176,6 +262,7 @@ def add_face_detection_result(
     face_count = face_result["faceCount"]
     result["faceCount"] = face_count
     result["faces"] = face_result["faces"]
+    result["faceDetectionBackend"] = face_result["detectorBackend"]
 
     if face_count == 0:
         issues.append(issue("NO_FACE_DETECTED", "未检测到有效人脸。"))
@@ -221,7 +308,12 @@ def add_face_detection_result(
     else:
         checks.append(check("头顶是否被截断", "pass", f"脸框上边距 {headroom:.0%}"))
 
-    checks.append(check("Face Detection", "pass", f"最大脸置信度 {largest_face['confidence']:.2f}"))
+    confidence = largest_face["confidence"]
+    confidence_text = f"{confidence:.2f}" if confidence is not None else "N/A"
+    detail = f"{face_result['detectorBackend']} / 最大脸置信度 {confidence_text}"
+    if face_result.get("fallbackReason"):
+        detail += " / MediaPipe fallback"
+    checks.append(check("Face Detection", "pass", detail))
 
 
 def validate_portrait(payload: ValidatePortraitRequest) -> dict[str, Any]:
@@ -258,6 +350,7 @@ def validate_portrait(payload: ValidatePortraitRequest) -> dict[str, Any]:
         "headroomScore": None,
         "occlusionScore": None,
         "validationOptions": payload.validationOptions.model_dump(),
+        "faceDetectionBackend": None,
         "checks": checks,
         "issues": issues,
     }
@@ -298,9 +391,14 @@ def validate_portrait(payload: ValidatePortraitRequest) -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    media_pipe_runtime_error = get_mediapipe_runtime_error()
     return {
         "ok": True,
-        "mediapipeInstalled": mp is not None,
+        "mediapipePackageInstalled": mp is not None,
+        "mediapipeModelExists": MEDIAPIPE_FACE_MODEL_PATH.exists(),
+        "mediapipeRuntimeReady": media_pipe_runtime_error is None,
+        "mediapipeRuntimeError": media_pipe_runtime_error,
+        "opencvInstalled": cv2 is not None,
     }
 
 
